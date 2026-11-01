@@ -6,6 +6,25 @@
 const encoder = new TextEncoder();
 const COOKIE = "__Host-invoice_session";
 const SESSION_SECONDS = 60 * 60 * 8;
+const ADMIN_EMAIL = "s.k.businessline@gmail.com";
+const normalizeEmail = s => String(s||"").trim().toLowerCase();
+async function hashPassword(password,salt) {
+  const key=await crypto.subtle.importKey("raw",encoder.encode(password),"PBKDF2",false,["deriveBits"]);
+  const bits=await crypto.subtle.deriveBits({name:"PBKDF2",salt:hexToBytes(salt),iterations:210000,hash:"SHA-256"},key,256);
+  return bytesToHex(new Uint8Array(bits));
+}
+async function getUser(env,email) {
+  return env.INVOICE_AUTH_DB.prepare("SELECT email, password_hash, salt FROM approved_users WHERE email=? AND active=1").bind(email).first();
+}
+function json(data,status=200) { return new Response(JSON.stringify(data),{status,headers:{"Content-Type":"application/json",...HEADERS}}); }
+const SETTINGS_PAGE=`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Access Settings | Invoice System</title><style>
+body{font:15px system-ui;background:#0f192b;color:#eaf0f8;margin:0;padding:20px}main{max-width:700px;margin:25px auto}h1{color:#e0be75}a{color:#e0be75}section{background:#19253a;border:1px solid #364965;border-radius:14px;padding:24px;margin:22px 0}input,button{font:inherit;border-radius:7px;padding:12px;margin:5px;background:#0b1425;color:#fff;border:1px solid #7184a0}button{cursor:pointer;background:#bd994a;color:#111a2c;font-weight:700}button.danger{background:#953b44;color:white}input{width:min(90%,390px)}li{padding:9px;border-bottom:1px solid #34465e;display:flex;justify-content:space-between;align-items:center;gap:12px}small{color:#9caec7}#msg{min-height:20px}
+</style></head><body><main><a href="/">← Back to Invoice System</a><h1>Settings · Access management</h1><p>Administrator: ${ADMIN_EMAIL}</p><section><h2>Approved accounts</h2><ul id="users"></ul></section><section><h2>Add approved email</h2><p><small>Set a unique temporary password for this person and send it privately. Their email alone cannot grant access.</small></p><form id="add"><input id="email" type="email" placeholder="staff@example.com" required maxlength="254"><input id="password" type="password" placeholder="Temporary password (min 12 characters)" required minlength="12"><button>Add user</button></form><p id="msg" role="status"></p></section><form method="POST" action="/__auth/logout"><button class="danger">Sign out</button></form></main><script>
+async function req(method,body){let r=await fetch("/__auth/users",{method,credentials:"same-origin",headers:{"Content-Type":"application/json"},body:body?JSON.stringify(body):undefined});let d=await r.json();if(!r.ok)throw Error(d.error||"Request failed");return d}
+async function refresh(){let d=await req("GET");const ul=document.querySelector("#users");ul.replaceChildren();for(let u of d.users){let li=document.createElement("li"),t=document.createElement("span");t.textContent=u.email+(u.admin?" (administrator)":"");li.append(t);if(!u.admin){let b=document.createElement("button");b.className="danger";b.textContent="Revoke";b.onclick=async()=>{if(!confirm("Revoke "+u.email+"?"))return;try{await req("DELETE",{email:u.email});await refresh()}catch(e){document.querySelector("#msg").textContent=e.message}};li.append(b)}ul.append(li)}}
+document.querySelector("#add").onsubmit=async e=>{e.preventDefault();const msg=document.querySelector("#msg");try{await req("POST",{email:document.querySelector("#email").value,password:document.querySelector("#password").value});msg.textContent="Account approved. Share the temporary password privately.";e.target.reset();await refresh()}catch(err){msg.textContent=err.message}};
+refresh().catch(e=>document.querySelector("#msg").textContent=e.message);
+</script></body></html>`;
 const HEADERS = {
   "Cache-Control": "no-store, no-cache, must-revalidate",
   "X-Content-Type-Options": "nosniff",
@@ -59,27 +78,66 @@ async function authorized(request,env) {
   const payload=value.slice(0,split),signature=value.slice(split+1);
   const [expiry,emailDigest]=payload.split(":");
   if(!/^\d{10,13}$/.test(expiry) || Number(expiry)<=Date.now() || !/^[0-9a-f]{64}$/.test(emailDigest||""))return false;
-  const expectedEmailDigest=bytesToHex(await digest(env.INVOICE_LOGIN_EMAIL.trim().toLowerCase()));
-  if(!equalBytes(hexToBytes(emailDigest),hexToBytes(expectedEmailDigest)))return false;
+  const adminDigest=bytesToHex(await digest(ADMIN_EMAIL));
+  if(!equalBytes(hexToBytes(emailDigest),hexToBytes(adminDigest))) {
+    if(!env.INVOICE_AUTH_DB) return false;
+    const user=await env.INVOICE_AUTH_DB.prepare("SELECT email FROM approved_users WHERE active=1").all();
+    let valid=false;
+    for(const row of (user.results||[])) {
+      const hashed=bytesToHex(await digest(row.email));
+      valid=valid || equalBytes(hexToBytes(emailDigest),hexToBytes(hashed));
+    }
+    if(!valid)return false;
+  }
   const expectedSig=await sign(env.INVOICE_SESSION_SECRET,payload);
   return equalBytes(hexToBytes(signature),hexToBytes(expectedSig));
 }
 export async function onRequest(context) {
   const {request,env}=context;
   const path=new URL(request.url).pathname;
-  if(!env.INVOICE_LOGIN_EMAIL || !env.INVOICE_LOGIN_PASSWORD || !env.INVOICE_SESSION_SECRET || env.INVOICE_SESSION_SECRET.length<32) {
-    return html("<h1>Invoice login not configured</h1><p>Administrator: set INVOICE_LOGIN_EMAIL, INVOICE_LOGIN_PASSWORD and INVOICE_SESSION_SECRET as encrypted Cloudflare Pages environment secrets.</p>",503);
+  if(!env.INVOICE_LOGIN_PASSWORD || !env.INVOICE_SESSION_SECRET || env.INVOICE_SESSION_SECRET.length<32 || !env.INVOICE_AUTH_DB) {
+    return html("<h1>Invoice login not configured</h1><p>Administrator: set INVOICE_LOGIN_PASSWORD, INVOICE_SESSION_SECRET and INVOICE_AUTH_DB as encrypted Cloudflare Pages environment secrets.</p>",503);
   }
   if(path==="/__auth/login" && request.method==="POST") {
     const form=await request.formData();
-    const email=String(form.get("email")||"").trim().toLowerCase();
+    const email=normalizeEmail(form.get("email"));
     const password=String(form.get("password")||"");
-    const emailOk=equalBytes(await digest(email),await digest(env.INVOICE_LOGIN_EMAIL.trim().toLowerCase()));
-    const passOk=equalBytes(await digest(password),await digest(env.INVOICE_LOGIN_PASSWORD));
+    const admin=email===ADMIN_EMAIL;
+    const user=admin?null:await getUser(env,email);
+    const emailOk=admin||!!user;
+    const passOk=admin ? equalBytes(await digest(password),await digest(env.INVOICE_LOGIN_PASSWORD)) : (user ? equalBytes(hexToBytes(await hashPassword(password,user.salt)),hexToBytes(user.password_hash)) : false);
     if(!emailOk || !passOk) return html(LOGIN_PAGE("Incorrect email or password."),401);
     const payload=`${Date.now()+SESSION_SECONDS*1000}:${bytesToHex(await digest(email))}`;
     const token=`${payload}.${await sign(env.INVOICE_SESSION_SECRET,payload)}`;
     return new Response(null,{status:303,headers:{Location:"/",...HEADERS,"Set-Cookie":`${COOKIE}=${token}; Path=/; Max-Age=${SESSION_SECONDS}; HttpOnly; Secure; SameSite=Strict`}});
+  }
+  if(path==="/__auth/settings" || path==="/__auth/users") {
+    if(!await authorized(request,env))return json({error:"Authentication required"},401);
+    const adminCookie=authCookie(request);
+    const payload=adminCookie.slice(0,adminCookie.lastIndexOf("."));
+    if(!payload.endsWith(":"+bytesToHex(await digest(ADMIN_EMAIL))))return json({error:"Administrator only"},403);
+    if(path==="/__auth/settings")return html(SETTINGS_PAGE);
+    if(request.method==="GET") {
+      const result=await env.INVOICE_AUTH_DB.prepare("SELECT email FROM approved_users WHERE active=1 ORDER BY email").all();
+      return json({users:[{email:ADMIN_EMAIL,admin:true},...(result.results||[]).map(x=>({email:x.email,admin:false}))]});
+    }
+    const origin=request.headers.get("Origin");
+    if(origin !== new URL(request.url).origin)return json({error:"Invalid request origin"},403);
+    const body=await request.json().catch(()=>({}));
+    const email=normalizeEmail(body.email);
+    if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||email.length>254||email===ADMIN_EMAIL)return json({error:"Invalid email"},400);
+    if(request.method==="POST") {
+      if(typeof body.password!=="string"||body.password.length<12||body.password.length>256)return json({error:"Password must be 12-256 characters"},400);
+      const salt=bytesToHex(crypto.getRandomValues(new Uint8Array(16)));
+      const hash=await hashPassword(body.password,salt);
+      await env.INVOICE_AUTH_DB.prepare("INSERT INTO approved_users(email,password_hash,salt,active) VALUES(?,?,?,1) ON CONFLICT(email) DO UPDATE SET password_hash=excluded.password_hash,salt=excluded.salt,active=1").bind(email,hash,salt).run();
+      return json({success:true});
+    }
+    if(request.method==="DELETE") {
+      await env.INVOICE_AUTH_DB.prepare("UPDATE approved_users SET active=0 WHERE email=?").bind(email).run();
+      return json({success:true});
+    }
+    return json({error:"Method not allowed"},405);
   }
   if(path==="/__auth/logout" && request.method==="POST") {
     const origin=request.headers.get("Origin");
@@ -96,6 +154,11 @@ export async function onRequest(context) {
     return html("Authentication required",401);
   }
   const response=await context.next();
+  if((response.headers.get("content-type")||"").includes("text/html") && path==="/") {
+    const raw=await response.text();
+    const nav='<a href="/__auth/settings" style="position:fixed;right:14px;bottom:14px;z-index:99999;background:#b89948;color:#091526;padding:12px 18px;border-radius:999px;font:700 14px system-ui;box-shadow:0 5px 22px #0007;text-decoration:none">⚙ Settings · Access</a>';
+    return html(raw.replace(/<\/body>/i,nav+'</body>'));
+  }
   const headers=new Headers(response.headers);
   headers.set("Cache-Control","private, no-store");
   headers.set("X-Content-Type-Options","nosniff");
