@@ -1,0 +1,8 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
+<rect width="512" height="512" rx="104" fill="#101827"/>
+<rect x="93" y="75" width="326" height="362" rx="28" fill="#fff"/>
+<rect x="135" y="126" width="241" height="17" rx="8" fill="#b89948"/>
+<path d="M145 198h223 M145 242h223 M145 286h142" stroke="#172a42" stroke-width="17" stroke-linecap="round"/>
+<rect x="132" y="345" width="248" height="48" rx="12" fill="#172a42"/>
+<text x="256" y="377" fill="#edcc7d" font-family="sans-serif" font-weight="bold" font-size="23" text-anchor="middle">SN90 / AMT</text>
+</svg>
