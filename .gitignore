@@ -1,0 +1,7 @@
+.env
+.env.*
+*.local
+invoice-engine-backup-*.json
+Dual-Company-Invoice-CRM-20-Designs*.html
+__pycache__/
+.pytest_cache/
