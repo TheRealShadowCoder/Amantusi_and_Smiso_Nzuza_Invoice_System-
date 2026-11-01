@@ -1,0 +1,19 @@
+{
+  "id": "./",
+  "name": "Smiso Nzuza & Amantusi Invoice System",
+  "short_name": "Invoice CRM",
+  "description": "Dual-company invoice, quotation and CRM system",
+  "start_url": "./",
+  "scope": "./",
+  "display": "standalone",
+  "background_color": "#101827",
+  "theme_color": "#101827",
+  "icons": [
+    {
+      "src": "./assets/app-icon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any",
+      "purpose": "any maskable"
+    }
+  ]
+}
