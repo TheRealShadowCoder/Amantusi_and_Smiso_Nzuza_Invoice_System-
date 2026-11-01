@@ -1,27 +1,15 @@
-/* Offline application shell. Do not intercept uploads, exports, or remote APIs. */
-const CACHE = 'sn90-amt-invoice-v1';
-const SHELL = ['./','./index.html','./manifest.webmanifest','./assets/app-icon.svg'];
-self.addEventListener('install', event => {
-  event.waitUntil(caches.open(CACHE).then(cache => cache.addAll(SHELL)).then(() => self.skipWaiting()));
-});
+/* Authentication-safe service worker.
+   Authenticated documents and invoices must NEVER be served from a shared cache.
+   The service worker preserves installability but delegates all requests to network.
+*/
+self.addEventListener('install', event => event.waitUntil(self.skipWaiting()));
 self.addEventListener('activate', event => {
-  event.waitUntil(caches.keys().then(keys => Promise.all(keys.filter(k => k !== CACHE).map(k => caches.delete(k)))).then(() => self.clients.claim()));
+  event.waitUntil((async () => {
+    for (const key of await caches.keys()) await caches.delete(key);
+    await self.clients.claim();
+  })());
 });
-self.addEventListener('fetch', event => {
-  const request = event.request;
-  if (request.method !== 'GET' || new URL(request.url).origin !== self.location.origin) return;
-  const url = new URL(request.url);
-  if (request.mode === 'navigate') {
-    event.respondWith(fetch(request).then(response => {
-      if (response.ok) {
-        const copy = response.clone();
-        caches.open(CACHE).then(cache => cache.put('./index.html', copy));
-      }
-      return response;
-    }).catch(() => caches.match('./index.html')));
-    return;
-  }
-  if (SHELL.some(p => new URL(p,self.registration.scope).pathname === url.pathname)) {
-    event.respondWith(caches.match(request).then(hit => hit || fetch(request)));
-  }
+self.addEventListener('fetch', () => {
+  // Deliberately do not intercept navigation or asset requests.
+  // Cloudflare Pages Functions must authenticate every request.
 });
