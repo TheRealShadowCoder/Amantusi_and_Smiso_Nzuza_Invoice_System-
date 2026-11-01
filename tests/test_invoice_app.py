@@ -57,7 +57,15 @@ def test_editor_crm_designs_and_persistence(base_url):
         page.locator('#itemEditors textarea').first.fill('Equipment hire for testing')
         page.locator('#save').click()
         page.wait_for_timeout(300)
-        assert 'Sample Customer - Test' in (page.locator('#records').text_content() or '')
+        assert 'Sample Customer - Test' in (page.locator('#records').text_content() or ''), {
+            'toast': page.locator('#toast').text_content(),
+            'client': page.locator('#client').input_value(),
+            'ref': page.locator('#ref').input_value(),
+            'search': page.locator('#search').input_value(),
+            'crm_rows': page.locator('#crmRows').text_content()[:350],
+            'records_in_storage': page.evaluate("Object.keys(localStorage).map(k=>[k,(localStorage.getItem(k)||'').slice(0,140)])"),
+            'items_state': page.evaluate("typeof state==='undefined'?'state unavailable':JSON.stringify(state.items).slice(0,700)"),
+        }
         page.reload(wait_until='domcontentloaded')
         page.wait_for_timeout(400)
         assert 'Sample Customer - Test' in (page.locator('#records').text_content() or '')
